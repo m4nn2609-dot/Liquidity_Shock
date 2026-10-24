@@ -1,0 +1,12 @@
+pandas
+numpy
+scipy
+scikit-learn
+yfinance
+streamlit
+plotly
+pytest
+ipykernel
+
+If your team keeps the FastAPI backend: fastapi, uvicorn, pydantic.
+If you go with Streamlit only, skip them.
