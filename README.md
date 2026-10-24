@@ -105,4 +105,4 @@ Then open http://127.0.0.1:8000/docs to try the endpoints.
 ## Team
 
 - Mann ([m4nn2609](https://github.com/m4nn2609))
-- _add teammates here_
+- Sagnik([plasmy-05](https://github.com/plasmy-05))
