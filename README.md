@@ -21,23 +21,41 @@ A portfolio can look liquid in normal markets and become very expensive to exit 
 
 ```
 Liquidity_Shock/
-├── data/                  # data loading
-│   ├── dataloader.py      # downloads OHLCV, returns DataFrames
-│   └── data_test.ipynb    # testing the loader
-├── eda/
-│   └── eda.ipynb          # exploratory analysis
-├── feature_engineering/
-│   ├── features.py        # all feature functions
-│   └── fe_test.ipynb      # testing and plotting features
-├── modeling/              # main ML work
-│   ├── model.py           # normal vs stressed classifier, training and evaluation
-│   └── modeling.ipynb     # experiments, validation, plots
-├── backend/               # FastAPI service
-│   ├── app.py             # app and endpoints
-│   └── schemas.py         # Pydantic request/response models
-├── main.py                # entry point
-├── requirements.txt
-└── README.md
+├── data/                              CSV data only
+│   ├── prices.csv                     market data
+│   ├── market_index.csv               Nifty and VIX
+│   ├── portfolio.csv                  your holdings
+│   ├── features.csv                   (generated, to be removed later)
+│   └── data_checks.ipynb              
+│
+├── dataloader.py                      downloads the CSVs (run once)
+│
+├── feature_engineering/               STEP 1: numbers from prices
+│   ├── __init__.py
+│   ├── features.py                    ADV, volatility, spread, Amihud, ML clues
+│   └── features_check.ipynb           
+│
+├── execution/                         STEP 2: days and costs
+│   ├── __init__.py
+│   ├── liquidation.py                 the file we just built
+│   └── schedules.py                   TO DO: sell-today vs staged, optimizer
+│
+├── stress/                            STEP 3: crisis versions
+│   └── scenarios.py                   TO DO
+│
+├── modeling/                          STEP 4: ML (in parallel)
+│   └── model.py                       TO DO: normal vs stressed classifier
+│
+├── app/                               STEP 5: what judges see
+│   └── streamlit_app.py               TO DO
+│
+├── tests/
+│   ├── test_features.py               17 tests
+│   └── test_liquidation.py            20 tests
+│
+├── conftest.py                        empty, lets tests find the folders
+├── requirements.txt  .gitignore  README.md
+└── docs/                              report, slides, demo video
 ```
 
 _This layout is a proposal. Folders and files may be renamed, split or merged as the project evolves._
