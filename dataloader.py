@@ -99,4 +99,3 @@ if __name__ == "__main__":
     DATA_DIR.mkdir(exist_ok=True)
     download_prices()
     download_index()
-    print("\nDone. Commit the CSVs so teammates don't need to re-download.")
