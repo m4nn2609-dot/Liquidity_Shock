@@ -10,6 +10,8 @@ Run from the project root:   python -m modeling.model
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -18,6 +20,8 @@ from sklearn.metrics import (average_precision_score, f1_score, precision_score,
                              recall_score, roc_auc_score)
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+
+ROOT = Path(__file__).resolve().parents[1]   # project root, so paths work from anywhere
 
 FEATURES = ["volume_ratio", "volume_ratio_z", "log_amihud20", "spread20", "cs_clipped20",
             "ret", "hl_range", "hl_range_z", "vol20", "vol20_z", "atr_pct",
@@ -30,11 +34,22 @@ def _day(series):
     return pd.to_datetime(series.astype(str).str[:10])
 
 
-def load(path="../data/features.csv", market_path="../data/market_index.csv", vix_col="india_vix"):
-    """Reads features.csv, then adds what features.csv does not contain, from market_index.csv:
+def load(path=None, market_path=None, vix_col="india_vix", features=None):
+    """Reads the feature table, then adds what it does not contain, from market_index.csv:
        - india_vix (the answer key, found by name if it is called something else)
-       - idx_return, idx_vol20, idx_drawdown (built by feature_engineering.features.build_index_features)"""
-    df = pd.read_csv(path)
+       - idx_return, idx_vol20, idx_drawdown (built by feature_engineering.features.build_index_features)
+    The features come from, in order: the `features` DataFrame if given, the CSV at `path`
+    (default data/features.csv), or are rebuilt from data/prices.csv if that CSV is missing."""
+    market_path = Path(market_path) if market_path else ROOT / "data" / "market_index.csv"
+    if features is not None:
+        df = features.copy()
+    else:
+        path = Path(path) if path else ROOT / "data" / "features.csv"
+        if path.exists():
+            df = pd.read_csv(path)
+        else:  # features.csv is a generated file; rebuild it instead of failing
+            from feature_engineering.features import build_features, load_prices
+            df = build_features(load_prices(ROOT / "data" / "prices.csv"))
     if "date" not in df.columns:
         df = df.rename(columns={df.columns[0]: "date"})
     df["date"] = _day(df["date"])
@@ -61,7 +76,7 @@ def load(path="../data/features.csv", market_path="../data/market_index.csv", vi
 
     df = df.dropna(subset=["india_vix"])  # days without a VIX value cannot be labelled
     if "amihud20" in df.columns:
-        df["log_amihud20"] = np.log1p(df["amihud20"])
+        df["log_amihud20"] = np.log(df["amihud20"].clip(lower=1e-12))   # real log (log1p of ~1e-5 does nothing)
     return df.sort_values(["date", "ticker"]).reset_index(drop=True)
 
 
@@ -105,8 +120,8 @@ def score(y_true, proba, thr=0.5):
     }
 
 
-def run(path="data/features.csv", train_end="2023-12-31", use_market=True):
-    df, thr = make_label(load(path), train_end)
+def run(path=None, train_end="2023-12-31", use_market=True, features=None):
+    df, thr = make_label(load(path, features=features), train_end)
     X, d, cols = get_xy(df, use_market)
     tr, te = d["is_train"].to_numpy(), ~d["is_train"].to_numpy()
     ytr, yte = d.loc[tr, "y"], d.loc[te, "y"]

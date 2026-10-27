@@ -98,9 +98,17 @@ def optimize_schedule(S, adv, sigma, price, p=0.10, deadline=None, lam=0.1, Y=1.
         q = np.clip(w, 0, None) * S
         return 1e4 * (impact_cost(q, adv, sigma, price, Y) + lam * waiting_risk(q, sigma, price)) / value
 
+    def gradient(w):  # exact derivative of `objective` (much faster than numerical differences)
+        w = np.clip(w, 0, None)
+        g_imp = 1.5 * Y * sigma * price * S ** 1.5 * np.sqrt(w) / np.sqrt(adv)
+        held = S * (w.sum() - np.cumsum(w))              # same as waiting_risk: shares held after each day
+        norm = np.sqrt(np.sum(held ** 2))
+        g_risk = np.zeros_like(w) if norm < 1e-12 else sigma * price * S * (np.cumsum(held) - held) / norm
+        return 1e4 * (g_imp + lam * g_risk) / value
+
     x0 = np.full(D, 1.0 / D)
     res = minimize(
-        objective, x0, method="SLSQP",
+        objective, x0, jac=gradient, method="SLSQP",
         bounds=[(0.0, min(1.0, cap / S))] * D,
         constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}],
         options={"maxiter": 400, "ftol": 1e-10},
