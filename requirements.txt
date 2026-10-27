@@ -1,0 +1,14 @@
+<<<<<<< Updated upstream
+=======
+pandas
+numpy
+scipy
+scikit-learn
+yfinance
+streamlit
+plotly
+pytest
+ipykernel
+nbformat
+matplotlib
+>>>>>>> Stashed changes
