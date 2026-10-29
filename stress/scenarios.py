@@ -34,7 +34,10 @@ def apply_stress(book, adv_mult=0.5, spread_mult=3.0, vol_mult=1.5):
 
 
 def _cost_arrays(S, P, adv, sig, spr, p, Y):
-    """Closed form for 'sell the cap every day': n full days of cap + one remainder day."""
+    """Closed form for 'sell the cap every day': n full days of cap + one remainder day.
+    We clip adv at 1% of its value to prevent numerical explosions during extreme shocks.
+    """
+    adv = np.maximum(adv, 1e-4) # Prevent division by zero or near-zero
     cap = p * adv
     n = np.floor(S / cap)
     r = S - n * cap
@@ -80,19 +83,39 @@ def monte_carlo(book, runs=2000, p=0.10, Y=1.0, rho=0.7, seed=42,
                 adv_mu=np.log(0.7), adv_sd=0.30,
                 spr_mu=np.log(2.0), spr_sd=0.40,
                 vol_mu=np.log(1.3), vol_sd=0.20):
-    """All holdings are stressed TOGETHER: each run draws one market-wide shock (weight rho)
-    plus a small shock per stock. Volume falls while spread and volatility rise in the same run.
-    Returns (array of portfolio costs, summary dict)."""
+    """All holdings are stressed TOGETHER.
+    Instead of one market shock, we use a Sectoral Contagion Model:
+    1. A global shock (rho_global) affects everyone.
+    2. A sector shock (rho_sector) affects stocks in the same sector.
+    3. An idiosyncratic shock affects only that stock.
+    """
     rng = np.random.default_rng(seed)
     n = len(book)
     S = book[COLS["shares"]].to_numpy(float)
     P = book[COLS["price"]].to_numpy(float)
 
-    zc = rng.standard_normal((runs, 1))  # shared market shock
+    # Map sectors to indices
+    sectors = book["sector"].astype(str).values
+    unique_sectors = np.unique(sectors)
+    sec_map = {s: i for i, s in enumerate(unique_sectors)}
+    sec_indices = np.array([sec_map[s] for s in sectors])
+    num_sec = len(unique_sectors)
+
+    # Shocks
+    zc_global = rng.standard_normal((runs, 1))              # Market-wide
+    zc_sector = rng.standard_normal((runs, num_sec))        # Sector-specific
+    zc_idiosync = rng.standard_normal((runs, n))           # Stock-specific
+
+    # Correlation weights: Global (50%), Sector (30%), Idiosyncratic (20%)
+    w_g, w_s, w_i = 0.5, 0.3, 0.2
 
     def shock(mu, sd, sign):
-        zi = rng.standard_normal((runs, n))
-        return np.exp(mu + sign * sd * (np.sqrt(rho) * zc + np.sqrt(1 - rho) * zi))
+        # Combine shocks for each stock based on its sector
+        # Shape: (runs, n)
+        combined = (w_g * zc_global +
+                    w_s * zc_sector[:, sec_indices] +
+                    w_i * zc_idiosync)
+        return np.exp(mu + sign * sd * combined)
 
     adv = book[COLS["adv"]].to_numpy(float) * shock(adv_mu, adv_sd, -1)
     spr = book[COLS["spread"]].to_numpy(float) * shock(spr_mu, spr_sd, +1)

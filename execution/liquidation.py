@@ -40,6 +40,8 @@ import pandas as pd
 
 DEFAULT_PARTICIPATION = 0.10   # sell at most 10% of daily volume
 DEFAULT_IMPACT_Y = 1.0         # square-root impact coefficient (typical range 0.5 - 1.5)
+MAX_LIQUIDATION_WINDOW = 60    # Maximum reasonable days to liquidate (standard fund limit)
+DEFAULT_CIRCUIT_LIMIT = 0.10   # 10% daily price band limit (common for NSE stocks)
 CRORE = 1e7
 
 BUCKET_EDGES = [0, 3, 12, 40, np.inf]
@@ -104,9 +106,12 @@ def _check_participation(participation: float) -> None:
 
 
 def days_to_liquidate(shares, adv, participation=DEFAULT_PARTICIPATION):
-    """shares / (participation * ADV). Works on numbers or pandas Series."""
+    """shares / (participation * ADV). Works on numbers or pandas Series.
+    Capped at MAX_LIQUIDATION_WINDOW to prevent unrealistic timelines.
+    """
     _check_participation(participation)
-    return shares / (participation * adv)
+    days = shares / (participation * adv)
+    return np.minimum(days, MAX_LIQUIDATION_WINDOW)
 
 
 def spread_cost(position_value, spread):
@@ -130,18 +135,58 @@ def max_participation_slices(shares, adv, participation=DEFAULT_PARTICIPATION) -
     return slices
 
 
-def impact_cost_for_slices(slices, adv, vol, price, y=DEFAULT_IMPACT_Y) -> float:
+def impact_cost_for_slices(slices, adv, vol, price, y=DEFAULT_IMPACT_Y, circuit_limit=DEFAULT_CIRCUIT_LIMIT) -> float:
     """Square-root market-impact cost (rupees) of selling `slices` shares per day.
-
-    On each day: price concession = y * vol * sqrt(q / adv), paid on the q shares
-    sold that day. Concentrating the selling in fewer days costs more, because
-    the concession grows faster than the amount sold.
+    Also simulates the risk of hitting a circuit limit: if the daily impact
+    exceeds the circuit_limit, the cost is penalized to reflect the inability to trade.
     """
     q = np.asarray(slices, dtype=float)
     if (q < 0).any():
         raise ValueError("slices cannot be negative")
-    return float(np.sum(y * vol * np.sqrt(q / adv) * q * price))
 
+    total_cost = 0.0
+    for slice_q in q:
+        # Daily price concession (as a fraction of price)
+        concession = y * vol * np.sqrt(slice_q / adv)
+
+        # Circuit Breaker Logic: If the impact is too high, the stock hits a limit.
+        # We model this as a 'liquidity penalty' where costs spike because you
+        # are forced to wait or accept a much worse price.
+        if concession > circuit_limit:
+            # Penalty: add 50% extra cost to represent the 'lock' risk
+            concession *= 1.5
+
+        total_cost += concession * slice_q * price
+
+    return float(total_cost)
+
+
+def optimize_participation(shares, adv, vol, price, target_days=None, impact_y=DEFAULT_IMPACT_Y):
+    """Finds the optimal participation rate to minimize total cost.
+    If target_days is provided, finds the minimum participation needed to exit in that time.
+    Otherwise, scans 1% to 20% to find the participation rate that minimizes impact cost
+    while staying within the MAX_LIQUIDATION_WINDOW.
+    """
+    if target_days:
+        # Participation needed to exit exactly in target_days
+        opt_p = shares / (target_days * adv)
+        opt_p = np.clip(opt_p, 0.001, 1.0)
+        return opt_p
+
+    # Scan for the most cost-efficient rate that still exits within MAX_LIQUIDATION_WINDOW
+    best_p = DEFAULT_PARTICIPATION
+    min_cost = float('inf')
+
+    for p in np.linspace(0.01, 0.20, 20):
+        days = shares / (p * adv)
+        if days <= MAX_LIQUIDATION_WINDOW:
+            slices = max_participation_slices(shares, adv, p)
+            cost = impact_cost_for_slices(slices, adv, vol, price, impact_y)
+            if cost < min_cost:
+                min_cost = cost
+                best_p = p
+
+    return best_p
 
 # --------------------------------------------------------------------------
 # 3. Report, ranking and summary
@@ -157,7 +202,19 @@ def liquidation_report(positions: pd.DataFrame,
     _check_participation(participation)
     rows = []
     for r in positions.to_dict("records"):
-        slices = max_participation_slices(r["shares"], r["adv"], participation)
+        # Calculate actual days needed vs capped window
+        raw_days = days_to_liquidate(r["shares"], r["adv"], participation)
+        actual_days = r["shares"] / (participation * r["adv"])
+
+        # If raw_days is capped, it means the position is a 'Whale'
+        # We simulate the cost by forcing the liquidation into the MAX_LIQUIDATION_WINDOW
+        # which increases the daily slice and thus the impact cost.
+        if actual_days > MAX_LIQUIDATION_WINDOW:
+            effective_participation = r["shares"] / (MAX_LIQUIDATION_WINDOW * r["adv"])
+            slices = max_participation_slices(r["shares"], r["adv"], effective_participation)
+        else:
+            slices = max_participation_slices(r["shares"], r["adv"], participation)
+
         sp_cost = float(spread_cost(r["position_value"], r["spread"]))
         im_cost = impact_cost_for_slices(slices, r["adv"], r["vol"], r["price"], impact_y)
         total = sp_cost + im_cost
@@ -168,7 +225,7 @@ def liquidation_report(positions: pd.DataFrame,
             "position_cr": r["position_value"] / CRORE,
             "adv": r["adv"],
             "position_pct_adv": 100.0 * r["shares"] / r["adv"],
-            "days_to_liquidate": float(days_to_liquidate(r["shares"], r["adv"], participation)),
+            "days_to_liquidate": float(raw_days),
             "trading_days": len(slices),
             "spread": r["spread"], "spread_cost": sp_cost, "impact_cost": im_cost,
             "total_cost": total,

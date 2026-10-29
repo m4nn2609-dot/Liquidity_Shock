@@ -61,7 +61,7 @@ Z_WINDOW = 252        # one trading year, for z-scores and drawdown
 Z_MIN_PERIODS = 126   # z-scores start after half a year of history
 TRADING_DAYS = 252    # for annualising volatility
 CRORE = 1e7           # 1 crore = 10 million rupees
-MIN_SPREAD = 0.0001   # 1 bp floor on the smoothed spread estimate (see spread20)
+MIN_SPREAD = 0.00002   # 0.2 bp floor (reduced from 1bp to better reflect ultra-liquid NSE stocks)
 MIN_VOLUME_FRACTION = 0.01   # drop days trading < 1% of the trailing 60-day median
 
 REQUIRED_COLUMNS = ["date", "ticker", "high", "low", "close", "adj_close", "volume"]
@@ -218,7 +218,12 @@ def _features_one_ticker(g: pd.DataFrame, window: int) -> pd.DataFrame:
     out["vol20_ann"] = out["vol20"] * np.sqrt(TRADING_DAYS)
 
     # Amihud illiquidity: average of |return| per crore of traded value.
-    amihud_daily = out["ret"].abs() / (out["traded_value"] / CRORE)
+    # We use a small epsilon to prevent division by zero for ghost stocks.
+    traded_crore = out["traded_value"] / CRORE
+    amihud_daily = out["ret"].abs() / traded_crore.replace(0.0, np.nan)
+    # Fill NaNs (where volume was 0) with a high penalty value (e.g., 10x the median)
+    # to reflect extreme illiquidity without breaking the rolling mean with 'inf'.
+    amihud_daily = amihud_daily.fillna(amihud_daily.median() * 10)
     out["amihud20"] = amihud_daily.rolling(window, min_periods=window).mean()
 
     # Spread: noisy daily Corwin-Schultz value (unclipped), then the rolling
